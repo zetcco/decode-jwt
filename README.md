@@ -1,2 +1,4 @@
 Just decodes a jwt and shows the info.
-Additionally, shows the date/time formats in Human Readable format. 
+Additionally,
+- Shows the date/time formats in Human Readable format. 
+- Shows the lifespan of the token
