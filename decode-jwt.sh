@@ -14,14 +14,13 @@ show_help() {
   echo -e "\n${BLUE}${BOLD}JWT DECODER HELP${NC}"
   draw_line
   echo -e "${YELLOW}Usage:${NC} $0 <jwt-or-payload> [timezone]"
+  echo -e "       $0 --diff <jwt1> <jwt2> [timezone]"
   echo -e "\n${BOLD}Options:${NC}"
   printf "  %-15s %s\n" "-h, --help" "Show this help message"
-  printf "  %-15s %s\n" "-l, --list-tz" "Show common timezone values and listing commands"
-  echo -e "\n${BOLD}Arguments:${NC}"
-  printf "  %-15s %s\n" "jwt-or-payload" "The JWT string (with or without 'jwt' prefix) or a base64 payload"
-  printf "  %-15s %s\n" "timezone" "Optional: IANA timezone (e.g., America/Los_Angeles). Defaults to local computer."
+  printf "  %-15s %s\n" "-l, --list-tz" "Show common timezone values"
+  printf "  %-15s %s\n" "-c, --diff" "Compare two different JWT tokens"
   echo -e "\n${BOLD}Example:${NC}"
-  echo -e "  $0 eyJhbGci... America/New_York"
+  echo -e "  $0 --diff <token1> <token2> UTC"
   draw_line
   echo ""
   exit 0
@@ -35,19 +34,15 @@ list_timezones() {
   echo -e "------------------------------------------------------------"
   printf "%-20s | %s\n" "Universal" "UTC, GMT"
   printf "%-20s | %s\n" "US (East/West)" "America/New_York, America/Los_Angeles"
-  printf "%-20s | %s\n" "US (Central/Mtn)" "America/Chicago, America/Denver"
-  printf "%-20s | %s\n" "Europe" "Europe/London, Europe/Paris, Europe/Berlin"
-  printf "%-20s | %s\n" "Asia" "Asia/Colombo, Asia/Kolkata, Asia/Tokyo, Asia/Singapore"
-  printf "%-20s | %s\n" "Australia" "Australia/Sydney, Australia/Melbourne"
+  printf "%-20s | %s\n" "Europe" "Europe/London, Europe/Paris"
+  printf "%-20s | %s\n" "Asia" "Asia/Colombo, Asia/Tokyo"
   echo -e "${CYAN}------------------------------------------------------------${NC}"
   echo -e "${BOLD}Tip:${NC} Use underscores for spaces (e.g., New_York)."
   
   if command -v timedatectl >/dev/null 2>&1; then
-    echo -e "\nTo see all $(( $(timedatectl list-timezones | wc -l) )) zones on this system, run:"
-    echo -e "${GREEN}timedatectl list-timezones${NC}"
+    echo -e "\nTo see all zones on this system, run: ${GREEN}timedatectl list-timezones${NC}"
   else
-    echo -e "\nTo see all zones on your Mac, run:"
-    echo -e "${GREEN}find /usr/share/zoneinfo -type f | cut -d/ -f5- | sort${NC}"
+    echo -e "\nTo see all zones on your Mac, run: ${GREEN}find /usr/share/zoneinfo -type f | cut -d/ -f5- | sort${NC}"
   fi
   echo ""
   exit 0
@@ -68,22 +63,24 @@ if [[ "$1" == "--list-tz" || "$1" == "-l" ]]; then
   list_timezones
 fi
 
-# --- Main Logic Starts Here ---
+# --- Helper Functions ---
+decode_base64url() {
+  local segment="$1"
+  segment=$(echo "$segment" | tr '_-' '/+')
+  local padding=$(( (4 - ${#segment} % 4) % 4 ))
+  for ((i=0; i<padding; i++)); do segment="${segment}="; done
+  echo "$segment" | base64 -D 2>/dev/null || echo "$segment" | base64 -d 2>/dev/null
+}
 
-# 1. TIMEZONE LOGIC
-# If $2 is provided, we set the TZ environment variable for this script process.
-# If not, we leave it alone so the system uses the local computer's timezone.
-if [ -n "$2" ]; then
-  export TZ="$2"
-fi
-# Get the timezone name for display purposes
-DISPLAY_TZ=$(date +%Z)
+draw_line() {
+    echo -e "${CYAN}------------------------------------------------------------${NC}"
+}
 
-# 2. CLEAN INPUT
-# Strip "jwt " prefix and remove any stray whitespace/newlines
-input=$(echo "$1" | sed -E 's/^(jwt|JWT)[[:space:]]+//' | tr -d '[:space:]')
+clean_input() {
+    echo "$1" | sed -E 's/^(jwt|JWT)[[:space:]]+//' | tr -d '[:space:]'
+}
 
-# Updated JQ Filter: Format = "May 11, 2026 at 04:02 PM IST"
+# --- Core Processing ---
 JQ_TIME_FILTER='walk(
   if type == "object" then
     with_entries(
@@ -97,18 +94,6 @@ JQ_TIME_FILTER='walk(
     .
   end
 )'
-
-decode_base64url() {
-  local segment="$1"
-  segment=$(echo "$segment" | tr '_-' '/+')
-  local padding=$(( (4 - ${#segment} % 4) % 4 ))
-  for ((i=0; i<padding; i++)); do segment="${segment}="; done
-  echo "$segment" | base64 -D 2>/dev/null || echo "$segment" | base64 -d 2>/dev/null
-}
-
-draw_line() {
-    echo -e "${CYAN}------------------------------------------------------------${NC}"
-}
 
 # Displays Metadata and the JSON body
 process_segment() {
@@ -151,34 +136,84 @@ process_segment() {
 }
 
 # --- Main Logic ---
-num_parts=$(awk -F'.' '{print NF}' <<< "$input")
+run_decode() {
+    local input_str="$1"
+    local num_parts=$(awk -F'.' '{print NF}' <<< "$input_str")
+    if (( num_parts == 3 )); then
+      process_segment "HEADER" "$(decode_base64url "$(echo "$input_str" | cut -d. -f1)")" "false"
+      process_segment "PAYLOAD" "$(decode_base64url "$(echo "$input_str" | cut -d. -f2)")" "true"
+    elif (( num_parts == 2 )); then
+      p1_decoded=$(decode_base64url "$(echo "$input_str" | cut -d. -f1)")
+      if echo "$p1_decoded" | jq -e 'has("iat") or has("exp") or has("sub")' >/dev/null 2>&1; then
+        process_segment "PAYLOAD (Part 1)" "$p1_decoded" "true"
+        # RESTORED: Show signature when part 1 is the payload
+        echo -e "${BLUE}${BOLD}SIGNATURE (Part 2)${NC}\n$(echo "$input_str" | cut -d. -f2)"
+      else
+        process_segment "HEADER (Part 1)" "$p1_decoded" "false"
+        process_segment "PAYLOAD (Part 2)" "$(decode_base64url "$(echo "$input_str" | cut -d. -f2)")" "true"
+      fi
+    else
+      process_segment "PAYLOAD" "$(decode_base64url "$input_str")" "true"
+    fi
+}
+
+# --- Comparison Mode Logic ---
+if [[ "$1" == "--diff" || "$1" == "-c" ]]; then
+    if [ $# -lt 3 ]; then echo -e "${RED}Error: Two tokens required for comparison.${NC}"; exit 1; fi
+    
+    if [ -n "$4" ]; then export TZ="$4"; fi
+    
+    token1=$(clean_input "$2")
+    token2=$(clean_input "$3")
+    
+    echo -e "\n${YELLOW}${BOLD}COMPARING TWO TOKENS${NC} (TZ: $(date +%Z))\n"
+    
+    # Create temp files and setup trap for cleanup
+    file1=$(mktemp)
+    file2=$(mktemp)
+    trap 'rm -f "$file1" "$file2" 2>/dev/null' EXIT
+    
+    # Refactored smart payload extraction for diffing
+    get_payload() {
+        local t=$(clean_input "$1")
+        local num=$(awk -F'.' '{print NF}' <<< "$t")
+        if (( num == 3 )); then 
+            decode_base64url "$(echo "$t" | cut -d. -f2)"
+        elif (( num == 2 )); then 
+            local p1=$(decode_base64url "$(echo "$t" | cut -d. -f1)")
+            # Fix: Use same smart check as run_decode
+            if echo "$p1" | jq -e 'has("iat") or has("exp") or has("sub")' >/dev/null 2>&1; then
+                echo "$p1"
+            else
+                decode_base64url "$(echo "$t" | cut -d. -f2)"
+            fi
+        else 
+            decode_base64url "$t"
+        fi
+    }
+
+    get_payload "$token1" | jq -S "$JQ_TIME_FILTER" > "$file1"
+    get_payload "$token2" | jq -S "$JQ_TIME_FILTER" > "$file2"
+
+    echo -e "${BLUE}Legend: ${RED}- Token 1${NC} | ${GREEN}+ Token 2${NC}\n"
+    diff --color=always -u "$file1" "$file2" | sed '1,2d'
+    
+    draw_line
+    exit 0
+fi
+
+# --- Standard Single Token Logic ---
+if [ -n "$2" ]; then
+  export TZ="$2"
+fi
+DISPLAY_TZ=$(date +%Z)
+input=$(clean_input "$1")
 
 echo -e "\n${YELLOW}Active Timezone: ${BOLD}$DISPLAY_TZ${NC}"
 if [ -z "$2" ]; then echo -e "${CYAN}(Detected from local computer)${NC}"; fi
 echo ""
 
-if (( num_parts == 3 )); then
-  # Standard JWT: Header.Payload.Signature
-  process_segment "HEADER" "$(decode_base64url "$(echo "$input" | cut -d. -f1)")" "false"
-  process_segment "PAYLOAD" "$(decode_base64url "$(echo "$input" | cut -d. -f2)")" "true"
-
-elif (( num_parts == 2 )); then
-  # Two parts: Could be Header.Payload OR Payload.Signature
-  p1_decoded=$(decode_base64url "$(echo "$input" | cut -d. -f1)")
-  
-  # Smart Check: Does Part 1 look like a payload?
-  if echo "$p1_decoded" | jq -e 'has("iat") or has("exp") or has("sub")' >/dev/null 2>&1; then
-    process_segment "PAYLOAD (Part 1)" "$p1_decoded" "true"
-    echo -e "${BLUE}${BOLD}SIGNATURE (Part 2)${NC}\n$(echo "$input" | cut -d. -f2)"
-  else
-    process_segment "HEADER (Part 1)" "$p1_decoded" "false"
-    process_segment "PAYLOAD (Part 2)" "$(decode_base64url "$(echo "$input" | cut -d. -f2)")" "true"
-  fi
-
-else
-  # Single part
-  process_segment "PAYLOAD" "$(decode_base64url "$input")" "true"
-fi
+run_decode "$input"
 
 draw_line
 echo ""
