@@ -14,10 +14,20 @@ if [ $# -lt 1 ]; then
   exit 1
 fi
 
-# 1. CLEAN INPUT: Strip "jwt " prefix (case insensitive) and remove whitespace
-input=$(echo "$1" | sed -E 's/^(jwt|JWT)[[:space:]]+//' | tr -d '[:space:]')
-user_tz="${2:-$(date +%Z)}"
+# 1. TIMEZONE LOGIC
+# If $2 is provided, we set the TZ environment variable for this script process.
+# If not, we leave it alone so the system uses the local computer's timezone.
+if [ -n "$2" ]; then
+  export TZ="$2"
+fi
+# Get the timezone name for display purposes
+DISPLAY_TZ=$(date +%Z)
 
+# 2. CLEAN INPUT
+# Strip "jwt " prefix and remove any stray whitespace/newlines
+input=$(echo "$1" | sed -E 's/^(jwt|JWT)[[:space:]]+//' | tr -d '[:space:]')
+
+# Updated JQ Filter: Format = "May 11, 2026 at 04:02 PM IST"
 JQ_TIME_FILTER='walk(
   if type == "object" then
     with_entries(
@@ -59,7 +69,9 @@ process_segment() {
 
     draw_line
     echo -e "${YELLOW}${BOLD}TOKEN METADATA${NC}"
-    printf "${CYAN}%-15s${NC} : %s\n" "Current Clock" "$(TZ="$user_tz" date -r "$now" "+%B %d, %Y at %I:%M:%S %p %Z")"
+    
+    # Shows current time in the active timezone
+    printf "${CYAN}%-15s${NC} : %s\n" "Current Clock" "$(date -r "$now" "+%B %d, %Y at %I:%M:%S %p %Z")"
 
     if [[ -n "$exp" && "$exp" =~ ^[0-9]+$ ]]; then
       if [ "$now" -gt "$exp" ]; then
@@ -78,14 +90,16 @@ process_segment() {
     draw_line
   fi
 
-  echo "$raw_json" | TZ="$user_tz" jq "$JQ_TIME_FILTER" 2>/dev/null || echo -e "${RED}Error parsing JSON${NC}"
+  echo "$raw_json" | jq "$JQ_TIME_FILTER" 2>/dev/null || echo -e "${RED}Error parsing JSON${NC}"
   echo ""
 }
 
 # --- Main Logic ---
 num_parts=$(awk -F'.' '{print NF}' <<< "$input")
 
-echo -e "\n${YELLOW}Decoding for Timezone: ${BOLD}$user_tz${NC}\n"
+echo -e "\n${YELLOW}Active Timezone: ${BOLD}$DISPLAY_TZ${NC}"
+if [ -z "$2" ]; then echo -e "${CYAN}(Detected from local computer)${NC}"; fi
+echo ""
 
 if (( num_parts == 3 )); then
   # Standard JWT: Header.Payload.Signature
