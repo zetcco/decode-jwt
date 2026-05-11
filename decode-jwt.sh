@@ -9,10 +9,66 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 BOLD='\033[1m'
 
+# --- Help Function ---
+show_help() {
+  echo -e "\n${BLUE}${BOLD}JWT DECODER HELP${NC}"
+  draw_line
+  echo -e "${YELLOW}Usage:${NC} $0 <jwt-or-payload> [timezone]"
+  echo -e "\n${BOLD}Options:${NC}"
+  printf "  %-15s %s\n" "-h, --help" "Show this help message"
+  printf "  %-15s %s\n" "-l, --list-tz" "Show common timezone values and listing commands"
+  echo -e "\n${BOLD}Arguments:${NC}"
+  printf "  %-15s %s\n" "jwt-or-payload" "The JWT string (with or without 'jwt' prefix) or a base64 payload"
+  printf "  %-15s %s\n" "timezone" "Optional: IANA timezone (e.g., America/Los_Angeles). Defaults to local computer."
+  echo -e "\n${BOLD}Example:${NC}"
+  echo -e "  $0 eyJhbGci... America/New_York"
+  draw_line
+  echo ""
+  exit 0
+}
+
+# --- Timezone Listing Function ---
+list_timezones() {
+  echo -e "\n${BLUE}${BOLD}COMMON TIMEZONE VALUES${NC}"
+  echo -e "${CYAN}------------------------------------------------------------${NC}"
+  printf "${YELLOW}%-20s${NC} | ${YELLOW}%s${NC}\n" "Region" "Example String"
+  echo -e "------------------------------------------------------------"
+  printf "%-20s | %s\n" "Universal" "UTC, GMT"
+  printf "%-20s | %s\n" "US (East/West)" "America/New_York, America/Los_Angeles"
+  printf "%-20s | %s\n" "US (Central/Mtn)" "America/Chicago, America/Denver"
+  printf "%-20s | %s\n" "Europe" "Europe/London, Europe/Paris, Europe/Berlin"
+  printf "%-20s | %s\n" "Asia" "Asia/Colombo, Asia/Kolkata, Asia/Tokyo, Asia/Singapore"
+  printf "%-20s | %s\n" "Australia" "Australia/Sydney, Australia/Melbourne"
+  echo -e "${CYAN}------------------------------------------------------------${NC}"
+  echo -e "${BOLD}Tip:${NC} Use underscores for spaces (e.g., New_York)."
+  
+  if command -v timedatectl >/dev/null 2>&1; then
+    echo -e "\nTo see all $(( $(timedatectl list-timezones | wc -l) )) zones on this system, run:"
+    echo -e "${GREEN}timedatectl list-timezones${NC}"
+  else
+    echo -e "\nTo see all zones on your Mac, run:"
+    echo -e "${GREEN}find /usr/share/zoneinfo -type f | cut -d/ -f5- | sort${NC}"
+  fi
+  echo ""
+  exit 0
+}
+
+# --- Argument Check ---
 if [ $# -lt 1 ]; then
   echo -e "${RED}Usage:${NC} $0 <jwt-or-payload> [timezone]"
+  echo -e "       $0 -h for help"
   exit 1
 fi
+
+if [[ "$1" == "--help" || "$1" == "-h" ]]; then
+  show_help
+fi
+
+if [[ "$1" == "--list-tz" || "$1" == "-l" ]]; then
+  list_timezones
+fi
+
+# --- Main Logic Starts Here ---
 
 # 1. TIMEZONE LOGIC
 # If $2 is provided, we set the TZ environment variable for this script process.
